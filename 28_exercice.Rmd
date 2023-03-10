@@ -1,0 +1,315 @@
+---
+title: "ejercicio_51"
+author: "jorge callejo"
+date: "2023-03-08"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = FALSE,
+	message = FALSE,
+	warning = FALSE,
+	include = TRUE
+)
+library(tidyverse)
+library(lubridate)
+library(scales)
+library(countrycode)
+library(ggplot2)
+library(plotly)
+library(WDI)
+library(janitor)
+library(mapproj)
+library(ggthemes)
+library(broom)
+library(widyr)
+library(ggraph)
+library(igraph)
+library(tidyr)
+library(dplyr)
+library(reshape2)
+library(tidytext)
+theme_set(theme_minimal())
+```
+
+
+```{r}
+bob_ross <- readr::read_csv("https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2019/2019-08-06/bob-ross.csv") 
+```
+
+
+```{r}
+head(bob_ross)
+dim(bob_ross)
+tail(bob_ross)
+sample(bob_ross)
+typeof(bob_ross)
+str(bob_ross)
+summary(bob_ross)
+```
+
+```{r}
+bob_ross_gathered <- bob_ross %>% 
+  janitor::clean_names() %>%
+  gather(element, present, -episode, -title) %>% 
+  filter(present == 1) %>% 
+  mutate(title = str_to_title(str_remove_all(title, '"')), 
+         element =str_to_title(str_replace(element, "_", " "))) %>% 
+  select(-present) %>% 
+  extract(episode, c("season", "episode_number"), "S(.*)E(.*)", convert = TRUE, remove = FALSE) %>% 
+  arrange(season, episode_number) 
+```
+
+```{r}
+bob_ross_gathered %>% 
+  count(element, sort = TRUE) %>% 
+  head(10) %>% 
+  knitr::kable()
+```
+
+
+
+```{r}
+bob_ross_gathered %>% 
+  count(element, sort = TRUE) %>% 
+  head(20) %>% 
+  mutate(element = fct_reorder(element, n)) %>% 
+  ggplot(aes(
+    element,
+    n, 
+    fill = element
+  ))+
+  geom_col()+
+  coord_flip()+
+  theme(legend.position = "none")
+```
+```{r}
+bob_ross_gathered %>% 
+  count(element, sort = TRUE) %>% 
+  tail(5) %>% 
+  mutate(element = fct_reorder(element, n)) %>% 
+  ggplot(aes(
+    element,
+    n,
+    fill = c("#aa11bb","#bb22cc","#bb33cc","#cc44dd","#dd55ee")
+  ))+
+  geom_col()+
+  coord_flip()+
+  theme(legend.position = "none")
+```
+
+## cuáles son los más "llenos", con más elemento en ellos?
+
+```{r}
+bob_ross_gathered %>% 
+  add_count(episode) %>% 
+  arrange(desc(n)) %>% 
+  view()
+```
+
+```{r}
+bob_ross_gathered %>% 
+  filter(element == "Steve Ross") %>% 
+  view()
+```
+
+## ¿Cómo han ido cambiando las pinturas de Ross con el tiempo?
+
+```{r}
+bob_ross_gathered %>% 
+  group_by(season) %>% 
+  summarize(episodes = n_distinct(episode)) %>% 
+  knitr::kable()
+```
+
+```{r}
+bob_ross_gathered %>% 
+  filter(!element %in% c("Tree", "Trees")) %>% 
+  add_count(season, name = "total_elements") %>% 
+  count(season, element, total_elements, sort = TRUE) %>% 
+  mutate(percent_elements = round(n / total_elements,3)) %>%
+  filter(element == "Mountain") %>% 
+  ggplot(aes(
+    season,
+    percent_elements
+  ))+
+  geom_line()+
+  expand_limits(y = 0)
+```
+
+```{r}
+by_season_element <- bob_ross_gathered %>% 
+  filter(!element %in% c("Tree", "Trees")) %>% 
+ group_by(season) %>% 
+  mutate(number_episode = n_distinct(episode)) %>% 
+  count(season, element, number_episode, sort = TRUE) %>% 
+  mutate(percent_incluid = n / number_episode)
+
+by_season_element %>% 
+  filter(element == "Mountain") %>% 
+  ggplot(aes(
+    season,
+    percent_incluid
+  ))+
+  geom_line()+
+  scale_y_continuous(labels = scales::percent_format()) +
+  expand_limits(y = 0)
+```
+```{r}
+by_season_element <- bob_ross_gathered %>% 
+  filter(!element %in% c("Tree", "Trees")) %>% 
+ group_by(season) %>% 
+  mutate(number_episode = n_distinct(episode)) %>% 
+  count(season, element, number_episode, sort = TRUE) %>% 
+  mutate(percent_incluid = n / number_episode) %>% 
+  group_by(element) %>% 
+  mutate(element_total = sum(n)) %>% 
+  ungroup()
+
+
+by_season_element %>% 
+  filter(element_total >= 100) %>% 
+  ggplot(aes(
+    season,
+    percent_incluid,
+    color = element
+  ))+
+  geom_line()+
+  scale_y_continuous(labels = scales::percent_format()) +
+  expand_limits(y = 0)+
+  theme(legend.position = "none")+
+  facet_wrap(~element)
+```
+
+
+
+## podría haber usado [muchos modelos con broom](https://r4ds.had.co.nz/many-models.html)
+
+### agrupamiento 
+
+¿Qué tiende a aparecer más junto?
+
+```{r}
+correlations <- bob_ross_gathered %>% 
+  add_count(element) %>% 
+  filter(n >= 10) %>% 
+  pairwise_cor(element, episode, sort = TRUE) 
+
+
+correlations %>% 
+  filter(item1 == "River") %>% 
+  head(20) %>% 
+  mutate(item2 = fct_reorder(item2, correlation)) %>% 
+  ggplot(aes(
+    item2,
+    correlation,
+    fill = item1
+  ))+
+  geom_col()+
+  coord_flip()+
+  labs(title = "¿Qué tiende a aparecer con un Río?")+
+  theme(legend.position = "none")
+```
+```{r}
+# install.packages("ggraph")
+# install.packages("igraph")
+correlations %>% 
+  head(150) %>% 
+  graph_from_data_frame() %>% 
+  ggraph()+
+  geom_edge_link(aes(
+    alpha = correlation
+  ))+
+  geom_node_point()+
+  geom_node_text(aes(
+    label = name
+  ), vjust = 1, hjust = -1)+
+  theme_void()
+  
+```
+## Analisis de principales componentes
+
+
+```{r}
+# install.packages("reshape2")
+# install.packages("broom")
+binary_matrix <- bob_ross_gathered %>% 
+  acast(title ~ element) 
+
+#columnas centradas
+centered_matrix <- t(t(binary_matrix) - colMeans(binary_matrix)) 
+
+svd_result <- svd(centered_matrix)
+
+element_weights <- tidy(svd_result, matrix = "v") %>% 
+ mutate(element = colnames(binary_matrix)[column])
+
+
+element_weights %>% 
+  filter(PC == 1) %>% 
+  top_n(20, abs(value)) %>% 
+  mutate(element = fct_reorder(element, value)) %>% 
+  ggplot(aes(
+    element,
+    value
+  ))+
+  geom_col()+
+  coord_flip()
+```
+
+```{r}
+#install.packages("tidytext")
+element_weights %>% 
+  filter(PC <= 4) %>% 
+  group_by(PC) %>% 
+  top_n(20, abs(value)) %>% 
+  ungroup() %>% 
+  mutate(element = reorder_within(element, value, PC)) %>% 
+  ggplot(aes(
+    element,
+    value,
+    fill = factor(PC)
+  ))+
+  geom_col(show.legend = FALSE)+
+  coord_flip()+
+  facet_wrap(~ PC, scales = "free")
+  scale_x_reordered()
+```
+```{r}
+painting_weights <- broom::tidy(svd_result, matrix = "u") %>% 
+  mutate(painting = rownames(binary_matrix)[row]) 
+```
+
+
+```{r}
+painting_weights %>% 
+  filter(PC == 1) %>%
+  arrange(desc(value)) 
+
+
+painting_weights %>% 
+  filter(PC <= 6) %>% 
+  group_by(PC) %>% 
+  top_n(20, abs(value)) %>% 
+  ungroup() %>% 
+  mutate(painting = reorder_within(painting, value, PC)) %>% 
+  ggplot(aes(
+    painting,
+    value,
+    fill = factor(PC)
+  ))+
+  geom_col(show.legend = FALSE)+
+  coord_flip()+
+  facet_wrap(~ PC, scales = "free")
+  scale_x_reordered()
+```
+```{r}
+broom::tidy(svd_result, matrix = "d") %>% 
+  ggplot(aes(
+    PC,
+    percent
+  ))+
+  geom_point()
+```
+
